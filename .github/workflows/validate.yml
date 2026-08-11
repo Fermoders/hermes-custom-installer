@@ -1,0 +1,48 @@
+name: Validate installer
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  powershell:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse installer
+        shell: pwsh
+        run: |
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path ./Install-HermesCustom.ps1),
+            [ref]$null,
+            [ref]$errors
+          )
+          if ($errors.Count) {
+            $errors | Format-List | Out-String | Write-Error
+            exit 1
+          }
+      - name: Verify defaults and official installer pin
+        shell: pwsh
+        run: |
+          $script = Get-Content ./Install-HermesCustom.ps1 -Raw
+          $required = @(
+            'Fermoders/hermes-agent',
+            'https://hermes-agent.nousresearch.com/install.ps1',
+            'IncludeDesktop',
+            'hermes doctor'
+          )
+          foreach ($needle in $required) {
+            if (-not $script.Contains($needle)) {
+              throw "Installer is missing required marker: $needle"
+            }
+          }
+
+  fork:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify custom fork branch
+        run: git ls-remote --exit-code https://github.com/Fermoders/hermes-agent.git refs/heads/main

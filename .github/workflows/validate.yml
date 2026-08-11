@@ -40,6 +40,11 @@ jobs:
               throw "Installer is missing required marker: $needle"
             }
           }
+      - name: Verify dirty checkout preservation
+        shell: pwsh
+        run: |
+          ./tests/Installer.ManagedCheckout.Tests.ps1
+          ./tests/Installer.ManagedCheckout.Functional.Tests.ps1
 
   fork:
     runs-on: ubuntu-latest

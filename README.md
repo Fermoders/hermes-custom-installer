@@ -12,6 +12,11 @@ irm https://raw.githubusercontent.com/Fermoders/hermes-custom-installer/master/I
 
 The same command updates an existing installation.
 
+If the existing managed checkout contains local edits from an older custom
+installation, the installer automatically saves them in a timestamped Git
+stash before switching to the maintained fork. It does not require `-Force`
+and does not delete the previous work.
+
 ## What it installs
 
 1. Runs the official installer from `https://hermes-agent.nousresearch.com/install.ps1`.
@@ -56,7 +61,7 @@ irm https://raw.githubusercontent.com/Fermoders/hermes-custom-installer/master/I
 | `-SkipSetup` | off | Do not open `hermes setup` |
 | `-NoDesktop` | off | Install CLI without building Desktop |
 | `-NoLaunch` | off | Do not launch Desktop after verification |
-| `-Force` | off | Discard local changes in the managed source checkout |
+| `-Force` | off | Explicitly discard local changes instead of preserving them in a recovery stash |
 
 ## Update model
 

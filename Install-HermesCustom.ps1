@@ -29,6 +29,35 @@ function Invoke-Native([string]$FilePath, [string[]]$Arguments, [string]$Working
     }
 }
 
+function Save-ManagedCheckoutChanges([string]$RepositoryPath) {
+    $status = @(& git -c windows.appendAtomically=false -C $RepositoryPath status --porcelain 2>$null)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not inspect the existing Hermes checkout."
+    }
+    if ([string]::IsNullOrWhiteSpace(($status -join "`n"))) {
+        return ""
+    }
+
+    $stashName = "hermes-custom-installer-backup-" + (Get-Date -Format "yyyyMMdd-HHmmss")
+    Write-Warning "Local changes were found in the managed Hermes checkout."
+    Write-Warning "They will be saved before switching to the custom fork."
+    $stashOutput = @(& git -c windows.appendAtomically=false -C $RepositoryPath stash push --include-untracked -m $stashName)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not save the existing Hermes checkout changes in Git stash."
+    }
+
+    $stashRef = (& git -c windows.appendAtomically=false -C $RepositoryPath stash list --format="%gd%x09%s" | Where-Object {
+        $_ -like "*$stashName*"
+    } | Select-Object -First 1) -replace "`t.*$", ""
+    if (-not $stashRef) {
+        throw "Git reported a successful stash, but the recovery stash could not be located."
+    }
+
+    Write-Warning "Saved existing changes in $stashRef ($stashName)."
+    Write-Warning "The custom fork already contains the maintained fixes; the backup is kept for manual recovery."
+    return ,$stashRef
+}
+
 if (-not $env:LOCALAPPDATA) {
     throw "LOCALAPPDATA is not available; this installer requires native Windows PowerShell."
 }
@@ -71,6 +100,7 @@ if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
 }
 
 Write-Step "Switching the managed checkout to the custom Hermes fork"
+$savedCheckoutStash = ""
 if (-not (Test-Path (Join-Path $InstallDir ".git"))) {
     if ((Test-Path $InstallDir) -and $Force) {
         Remove-Item -Recurse -Force $InstallDir
@@ -79,13 +109,11 @@ if (-not (Test-Path (Join-Path $InstallDir ".git"))) {
     }
     Invoke-Native "git" @("clone", "--branch", $Ref, $RepositoryUrl, $InstallDir)
 } else {
-    $dirty = (& git -C $InstallDir status --porcelain)
-    if ($dirty -and -not $Force) {
-        throw "The Hermes checkout contains local changes. Commit/stash them or re-run with -Force."
-    }
-    if ($dirty -and $Force) {
+    if ($Force) {
         Invoke-Native "git" @("-C", $InstallDir, "reset", "--hard")
         Invoke-Native "git" @("-C", $InstallDir, "clean", "-fd")
+    } else {
+        $savedCheckoutStash = Save-ManagedCheckoutChanges $InstallDir
     }
     Invoke-Native "git" @("-C", $InstallDir, "remote", "set-url", "origin", $RepositoryUrl)
     Invoke-Native "git" @("-C", $InstallDir, "fetch", "--prune", "origin", $Ref)
@@ -122,3 +150,7 @@ if (-not $NoDesktop -and -not $NoLaunch) {
 Write-Host "`nHermes Custom is installed." -ForegroundColor Green
 Write-Host "Source: $RepositoryUrl@$Ref"
 Write-Host "Update: rerun this same command."
+if ($savedCheckoutStash) {
+    Write-Host "Previous local changes are preserved in: $savedCheckoutStash" -ForegroundColor Yellow
+    Write-Host "Inspect them with: git -C `"$InstallDir`" stash show --stat $savedCheckoutStash"
+}

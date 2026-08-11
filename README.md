@@ -7,7 +7,7 @@ One-command Windows installer for the official Nous Research Hermes Agent plus t
 Run in **PowerShell**:
 
 ```powershell
-irm https://raw.githubusercontent.com/Fermoders/hermes-custom-installer/main/Install-HermesCustom.ps1 | iex
+irm https://raw.githubusercontent.com/Fermoders/hermes-custom-installer/master/Install-HermesCustom.ps1 | iex
 ```
 
 The same command updates an existing installation.
@@ -34,7 +34,7 @@ The custom source currently includes:
 Download the script first when passing options:
 
 ```powershell
-irm https://raw.githubusercontent.com/Fermoders/hermes-custom-installer/main/Install-HermesCustom.ps1 -OutFile "$env:TEMP\Install-HermesCustom.ps1"
+irm https://raw.githubusercontent.com/Fermoders/hermes-custom-installer/master/Install-HermesCustom.ps1 -OutFile "$env:TEMP\Install-HermesCustom.ps1"
 
 # Install without opening the setup wizard or launching Desktop
 & "$env:TEMP\Install-HermesCustom.ps1" -SkipSetup -NoLaunch

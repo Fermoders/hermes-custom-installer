@@ -47,8 +47,16 @@ Write-Host "Ref:        $Ref"
 Write-Host "Install:    $InstallDir"
 
 Write-Step "Installing the official Hermes prerequisites and CLI"
-$officialInstaller = (Invoke-WebRequest -UseBasicParsing "https://hermes-agent.nousresearch.com/install.ps1").Content
-$officialScript = [scriptblock]::Create($officialInstaller)
+$officialInstallerResponse = Invoke-WebRequest -UseBasicParsing "https://hermes-agent.nousresearch.com/install.ps1"
+$officialInstaller = $officialInstallerResponse.Content
+if (-not $officialInstaller -and $officialInstallerResponse.RawContentStream) {
+    $reader = New-Object System.IO.StreamReader($officialInstallerResponse.RawContentStream)
+    $officialInstaller = $reader.ReadToEnd()
+}
+if (-not $officialInstaller) {
+    throw "The official Hermes installer downloaded successfully but contained no script text."
+}
+$officialScript = [scriptblock]::Create([string]$officialInstaller)
 $officialArgs = @{
     HermesHome = $HermesHome
     InstallDir = $InstallDir

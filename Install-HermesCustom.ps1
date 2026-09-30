@@ -6,6 +6,8 @@ param(
     [switch]$SkipSetup,
     [switch]$NoDesktop,
     [switch]$NoLaunch,
+    [switch]$SkipBrowser,
+    [switch]$SkipComputerUse,
     [switch]$Force
 )
 
@@ -53,6 +55,11 @@ function Save-ManagedCheckoutChanges([string]$RepositoryPath) {
         throw "Git reported a successful stash, but the recovery stash could not be located."
     }
 
+    $remaining = @(& git -c windows.appendAtomically=false -C $RepositoryPath status --porcelain)
+    if ($LASTEXITCODE -ne 0 -or -not [string]::IsNullOrWhiteSpace(($remaining -join "`n"))) {
+        throw "The recovery stash was created, but the managed checkout is not clean; refusing to switch sources."
+    }
+
     Write-Warning "Saved existing changes in $stashRef ($stashName)."
     Write-Warning "The custom fork already contains the maintained fixes; the backup is kept for manual recovery."
     return ,$stashRef
@@ -75,7 +82,19 @@ Write-Host "Repository: $RepositoryUrl"
 Write-Host "Ref:        $Ref"
 Write-Host "Install:    $InstallDir"
 
-Write-Step "Installing the official Hermes prerequisites and CLI"
+# Preserve legacy hand edits before upstream retargets the checkout. Upstream owns
+# clone/update and creates durable recovery refs for displaced local commits.
+$savedCheckoutStash = ""
+if (Test-Path (Join-Path $InstallDir ".git")) {
+    if ($Force) {
+        Invoke-Native "git" @("-C", $InstallDir, "reset", "--hard")
+        Invoke-Native "git" @("-C", $InstallDir, "clean", "-fd")
+    } else {
+        $savedCheckoutStash = Save-ManagedCheckoutChanges $InstallDir
+    }
+}
+
+Write-Step "Installing the custom source with the official Hermes installer"
 $officialInstallerResponse = Invoke-WebRequest -UseBasicParsing "https://hermes-agent.nousresearch.com/install.ps1"
 $officialInstaller = $officialInstallerResponse.Content
 if (-not $officialInstaller -and $officialInstallerResponse.RawContentStream) {
@@ -89,62 +108,60 @@ $officialScript = [scriptblock]::Create([string]$officialInstaller)
 $officialArgs = @{
     HermesHome = $HermesHome
     InstallDir = $InstallDir
-    Branch = "main"
-    SkipSetup = $true
+    Branch = $Ref
+    NonInteractive = $true
+    SkipBrowser = [bool]$SkipBrowser
+    SkipComputerUse = [bool]$SkipComputerUse
 }
 if (-not $NoDesktop) { $officialArgs.IncludeDesktop = $true }
-& $officialScript @officialArgs
-
-if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-    throw "The official installer completed, but git is still unavailable."
-}
-
-Write-Step "Switching the managed checkout to the custom Hermes fork"
-$savedCheckoutStash = ""
-if (-not (Test-Path (Join-Path $InstallDir ".git"))) {
-    if ((Test-Path $InstallDir) -and $Force) {
-        Remove-Item -Recurse -Force $InstallDir
-    } elseif (Test-Path $InstallDir) {
-        throw "The official install directory is not a Git checkout. Re-run with -Force to replace it."
+$previousRepoUrl = $env:HERMES_REPO_URL
+$previousHermesHome = $env:HERMES_HOME
+try {
+    $env:HERMES_REPO_URL = $RepositoryUrl
+    $env:HERMES_HOME = $HermesHome
+    # Dynamically invoked upstream reports caught failures via LASTEXITCODE.
+    $global:LASTEXITCODE = 0
+    & $officialScript @officialArgs
+    if ($LASTEXITCODE -ne 0) {
+        throw "The official Hermes installer failed with exit code $LASTEXITCODE."
     }
-    Invoke-Native "git" @("clone", "--branch", $Ref, $RepositoryUrl, $InstallDir)
-} else {
-    if ($Force) {
-        Invoke-Native "git" @("-C", $InstallDir, "reset", "--hard")
-        Invoke-Native "git" @("-C", $InstallDir, "clean", "-fd")
-    } else {
-        $savedCheckoutStash = Save-ManagedCheckoutChanges $InstallDir
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        throw "The official installer completed, but git is still unavailable."
     }
-    Invoke-Native "git" @("-C", $InstallDir, "remote", "set-url", "origin", $RepositoryUrl)
-    Invoke-Native "git" @("-C", $InstallDir, "fetch", "--prune", "origin", $Ref)
-    Invoke-Native "git" @("-C", $InstallDir, "checkout", "-B", $Ref, "FETCH_HEAD")
-    Invoke-Native "git" @("-C", $InstallDir, "reset", "--hard", "FETCH_HEAD")
-    Invoke-Native "git" @("-C", $InstallDir, "branch", "--set-upstream-to", "origin/$Ref", $Ref)
-}
-Invoke-Native "git" @("-C", $InstallDir, "config", "core.autocrlf", "false")
+    $origin = & git -C $InstallDir remote get-url origin
+    if ($LASTEXITCODE -ne 0 -or $origin -ne $RepositoryUrl) {
+        throw "Installed source origin does not match $RepositoryUrl."
+    }
+    $branch = & git -C $InstallDir rev-parse --abbrev-ref HEAD
+    if ($LASTEXITCODE -ne 0 -or $branch -ne $Ref) {
+        throw "Installed source branch does not match $Ref."
+    }
+    foreach ($file in @('pm/lock.json', 'pm/cli.py', 'hermes_cli/source_completion.py', 'scripts/desktop-update/runtime.ps1')) {
+        if (-not (Test-Path (Join-Path $InstallDir $file))) {
+            throw "Installed fork lacks the current PM/source-completion contract: $file"
+        }
+    }
+    if (-not $NoDesktop) {
+        $artifacts = @('win-unpacked', 'win-ia32-unpacked', 'win-arm64-unpacked') | Where-Object {
+            Test-Path (Join-Path $InstallDir "apps/desktop/release/$_/Hermes.exe")
+        }
+        if (-not $artifacts) { throw "The requested Desktop build produced no Hermes.exe." }
+    }
 
-Write-Step "Re-running the official installer against the custom source tree"
-$customArgs = @{
-    HermesHome = $HermesHome
-    InstallDir = $InstallDir
-    Branch = $Ref
-    SkipSetup = $true
-}
-if (-not $NoDesktop) { $customArgs.IncludeDesktop = $true }
-& $officialScript @customArgs
-
-if (-not $SkipSetup) {
-    Write-Step "Opening Hermes setup"
-    & hermes setup
-}
-
-Write-Step "Verifying the installation"
-& hermes --version
-& hermes doctor
-
-if (-not $NoDesktop -and -not $NoLaunch) {
-    Write-Step "Launching Hermes Desktop"
-    Start-Process "hermes" -ArgumentList "desktop"
+    if (-not $SkipSetup) {
+        Write-Step "Opening Hermes setup"
+        Invoke-Native "hermes" @("setup")
+    }
+    Write-Step "Verifying the installation"
+    Invoke-Native "hermes" @("--version")
+    Invoke-Native "hermes" @("doctor") # hermes doctor
+    if (-not $NoDesktop -and -not $NoLaunch) {
+        Write-Step "Launching Hermes Desktop"
+        Start-Process "hermes" -ArgumentList "desktop"
+    }
+} finally {
+    $env:HERMES_REPO_URL = $previousRepoUrl
+    $env:HERMES_HOME = $previousHermesHome
 }
 
 Write-Host "`nHermes Custom is installed." -ForegroundColor Green

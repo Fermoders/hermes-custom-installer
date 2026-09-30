@@ -40,6 +40,12 @@ jobs:
               throw "Installer is missing required marker: $needle"
             }
           }
+      - name: Verify official invocation and failure propagation
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force .work | Out-Null
+          Invoke-WebRequest https://hermes-agent.nousresearch.com/install.ps1 -OutFile .work/official-install.ps1
+          ./tests/Installer.Invocation.Tests.ps1
       - name: Verify dirty checkout preservation
         shell: pwsh
         run: |
@@ -50,4 +56,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Verify custom fork branch
-        run: git ls-remote --exit-code https://github.com/Fermoders/hermes-agent.git refs/heads/main
+        run: |
+          git clone --depth 1 --branch main https://github.com/Fermoders/hermes-agent.git fork
+          git -C fork rev-parse HEAD
+          for file in pm/lock.json pm/cli.py hermes_cli/source_completion.py scripts/desktop-update/runtime.ps1; do
+            test -f "fork/$file" || { printf 'Fork missing required upstream contract: %s\n' "$file"; exit 1; }
+          done

@@ -7,7 +7,7 @@ One-command Windows installer for the official Nous Research Hermes Agent plus t
 Run in **PowerShell**:
 
 ```powershell
-irm https://raw.githubusercontent.com/Fermoders/hermes-custom-installer/master/Install-HermesCustom.ps1 | iex
+irm https://raw.githubusercontent.com/Fermoders/hermes-custom-installer/main/Install-HermesCustom.ps1 | iex
 ```
 
 The same command updates an existing installation.
@@ -19,12 +19,23 @@ and does not delete the previous work.
 
 ## What it installs
 
-1. Runs the official installer from `https://hermes-agent.nousresearch.com/install.ps1`.
-2. Installs the official prerequisites, Python environment, CLI, Node dependencies, and Desktop app.
-3. Switches the managed source checkout to the custom fork.
-4. Re-runs the official dependency/build stages from that custom source.
-5. Runs `hermes setup`, `hermes --version`, and `hermes doctor`.
-6. Launches Hermes Desktop.
+1. Saves existing tracked/untracked source edits in a recovery stash unless `-Force` is requested.
+2. Runs the official installer once with `HERMES_REPO_URL` set to the custom repository and `Branch` set to `-Ref`.
+3. Lets upstream manage checkout recovery, PM-managed Python 3.14, dependencies, source completion, and the requested Desktop build.
+4. Checks installer status, source origin/branch, required PM/runtime files, and the requested Desktop artifact.
+5. Runs `hermes setup`, `hermes --version`, and `hermes doctor`, stopping on any failure.
+6. Launches Hermes Desktop unless disabled.
+
+The official pass uses `-NonInteractive`; `-SkipSetup` controls the wrapper's
+subsequent setup wizard. Caller repository/home environment values are restored
+on success or failure. Upstream preserves displaced local commits with recovery
+refs; the wrapper keeps its migration stash for manual inspection.
+
+This wrapper requires a modern downstream source tree containing `pm/lock.json`,
+`pm/cli.py`, `hermes_cli/source_completion.py`, and
+`scripts/desktop-update/runtime.ps1`. Publish the upstream merge in the fork
+before deploying this wrapper. Parser and mocked tests are not a live-install
+smoke test.
 
 The custom source currently includes:
 
@@ -39,12 +50,12 @@ The custom source currently includes:
 Download the script first when passing options:
 
 ```powershell
-irm https://raw.githubusercontent.com/Fermoders/hermes-custom-installer/master/Install-HermesCustom.ps1 -OutFile "$env:TEMP\Install-HermesCustom.ps1"
+irm https://raw.githubusercontent.com/Fermoders/hermes-custom-installer/main/Install-HermesCustom.ps1 -OutFile "$env:TEMP\Install-HermesCustom.ps1"
 
 # Install without opening the setup wizard or launching Desktop
 & "$env:TEMP\Install-HermesCustom.ps1" -SkipSetup -NoLaunch
 
-# CLI only
+# Do not request a new Desktop build (existing Desktop may still be rebuilt)
 & "$env:TEMP\Install-HermesCustom.ps1" -NoDesktop -NoLaunch
 
 # Replace local modifications in the managed checkout
@@ -59,7 +70,9 @@ irm https://raw.githubusercontent.com/Fermoders/hermes-custom-installer/master/I
 | `-Ref` | `main` | Branch to install and follow |
 | `-HermesHome` | `%LOCALAPPDATA%\hermes` | Hermes data/install root |
 | `-SkipSetup` | off | Do not open `hermes setup` |
-| `-NoDesktop` | off | Install CLI without building Desktop |
+| `-NoDesktop` | off | Do not request a new Desktop build; upstream may rebuild an existing Desktop |
+| `-SkipBrowser` | off | Pass upstream's persistent PM browser-tools opt-out |
+| `-SkipComputerUse` | off | Pass upstream's persistent PM computer-use opt-out |
 | `-NoLaunch` | off | Do not launch Desktop after verification |
 | `-Force` | off | Explicitly discard local changes instead of preserving them in a recovery stash |
 

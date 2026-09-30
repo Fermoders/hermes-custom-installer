@@ -12,9 +12,12 @@ foreach ($name in @('Invoke-GitFetchWithRetry', 'ConvertTo-RetryingInstallerScri
 $global:FetchRetryCalls = 0
 $global:FetchRetryRaceAttempts = 1
 $global:FetchRetryFailure = ''
+$global:FetchRetryInvocationFailure = $false
 function git {
     $global:FetchRetryCalls++
-    if ($global:FetchRetryFailure) {
+    if ($global:FetchRetryInvocationFailure) {
+        nonexistent-hermes-git-command fetch origin main
+    } elseif ($global:FetchRetryFailure) {
         Write-Output $global:FetchRetryFailure
         $global:LASTEXITCODE = 1
     } elseif ($global:FetchRetryCalls -le $global:FetchRetryRaceAttempts) {
@@ -71,6 +74,18 @@ $global:FetchRetryTail++
     }
     if ($LASTEXITCODE -eq 0) { throw 'a missing fetch command must not be reported as successful' }
 
+    $global:FetchRetryCalls = 0
+    $global:FetchRetryTail = 0
+    $global:FetchRetryInvocationFailure = $true
+    $caught = $false
+    try { & $official -InstallDir 'fixture' -Branch 'main' | Out-Null } catch {
+        if ($_ -notmatch 'fetch failed' -and $_.Exception -isnot [Management.Automation.CommandNotFoundException]) { throw }
+        $caught = $true
+    } finally {
+        $global:FetchRetryInvocationFailure = $false
+    }
+    if (-not $caught -or $LASTEXITCODE -eq 0 -or $global:FetchRetryCalls -ne 1 -or $global:FetchRetryTail -ne 0) { throw 'invocation failure retried or allowed the adapted installer tail' }
+
     foreach ($failure in @(
         'fatal: could not read Username for https://example.invalid',
         'fatal: unable to access https://example.invalid: Could not resolve host',
@@ -90,7 +105,7 @@ $global:FetchRetryTail++
         Invoke-GitFetchWithRetry { git fetch origin main } -RetryDelayMilliseconds 0 | Out-Null
         if ($global:FetchRetryCalls -ne 3 -or $LASTEXITCODE -ne 1) { throw 'persistent ref race must stop after three attempts' }
     }
-    foreach ($badScript in @('git -C $InstallDir status --short', ($fixture + "`ngit fetch origin main"))) {
+    foreach ($badScript in @('git -C $InstallDir status --short', 'git fetch origin main', 'git -C $OtherDir fetch origin main', ($fixture + "`ngit fetch origin main"))) {
         $caught = $false
         try { ConvertTo-RetryingInstallerScript $badScript | Out-Null } catch {
             if ($_ -notmatch 'repository fetch') { throw }
@@ -98,9 +113,30 @@ $global:FetchRetryTail++
         }
         if (-not $caught) { throw 'changed upstream fetch contract was silently accepted' }
     }
+    $caught = $false
+    try { ConvertTo-RetryingInstallerScript 'param([string]$Branch' | Out-Null } catch {
+        if ($_ -notmatch 'could not be parsed') { throw }
+        $caught = $true
+    }
+    if (-not $caught) { throw 'malformed upstream script was silently accepted' }
     Write-Output 'bounded fetch-race retry and non-retryable failure checks passed'
 } finally {
     Remove-Item Function:git
+}
+
+# Real native stderr must not be confused with a command that never starts.
+$callerErrorPreference = $ErrorActionPreference
+$callerNativePreference = $PSNativeCommandUseErrorActionPreference
+try {
+    $PSNativeCommandUseErrorActionPreference = $true
+    $output = @(Invoke-GitFetchWithRetry { & cmd.exe /d /c 'echo harmless-native-stderr 1>&2 & exit /b 0' } -RetryDelayMilliseconds 0)
+    if ($LASTEXITCODE -ne 0 -or ($output -join "`n") -notmatch 'harmless-native-stderr') { throw 'zero-exit native stderr was rejected or hidden' }
+    Invoke-GitFetchWithRetry { & cmd.exe /d /c 'echo native-failure 1>&2 & exit /b 23' } -RetryDelayMilliseconds 0 | Out-Null
+    if ($LASTEXITCODE -ne 23) { throw 'native nonzero exit status was not preserved' }
+    if ($ErrorActionPreference -ne $callerErrorPreference -or $PSNativeCommandUseErrorActionPreference -ne $true) { throw 'fetch helper changed caller error preferences' }
+    Write-Output 'native stderr, exact exit status and caller preferences checks passed'
+} finally {
+    $PSNativeCommandUseErrorActionPreference = $callerNativePreference
 }
 
 # Each scenario needs a fresh clone: rewinding a ref in a checkout already
@@ -192,6 +228,49 @@ try {
         if (-not $caught) { throw 'official repository stage continued after a native fetch error' }
         if ((& $gitExe -C $InstallDir rev-parse HEAD).Trim() -ne $failureRace.Initial) { throw 'official stage advanced HEAD after a fetch error' }
         Write-Output "adapted official repository stage retained native failure (quiet=$quiet)"
+
+        # Exhaustion must stop upstream before it inspects/stashes a dirty tree
+        # or checks out/merges. Inject only fetch failures; other Git calls run
+        # against the disposable checkout through the real executable.
+        foreach ($fault in @('persistent-race', 'invocation-failure')) {
+            $blockedRace = New-FetchRaceFixture "official-$fault-$quiet"
+            $InstallDir = $blockedRace.Checkout
+            Set-Content (Join-Path $InstallDir 'tracked.txt') 'local edit'
+            Set-Content (Join-Path $InstallDir 'untracked.txt') 'keep me'
+            $global:StageFetchFault = $fault
+            $global:StageFetchCalls = 0
+            $global:StageBlockedCommands = @()
+            function git {
+                $PSNativeCommandUseErrorActionPreference = $false
+                if ($args -contains 'fetch') {
+                    $global:StageFetchCalls++
+                    if ($global:StageFetchFault -eq 'invocation-failure') {
+                        nonexistent-hermes-git-command fetch origin main
+                    } else {
+                        & cmd.exe /d /c 'echo error: fetching ref refs/remotes/origin/main failed: incorrect old value provided 1>&2 & exit /b 1'
+                    }
+                } else {
+                    foreach ($blocked in @('status', 'stash', 'checkout', 'merge', 'reset')) {
+                        if ($args -contains $blocked) { $global:StageBlockedCommands += $blocked }
+                    }
+                    & $gitExe @args
+                }
+            }
+            $caught = $false
+            try { Stage-Repository | Out-Null } catch {
+                if ($_ -notmatch 'git fetch failed' -and $_.Exception -isnot [Management.Automation.CommandNotFoundException]) { throw }
+                $caught = $true
+            } finally {
+                Remove-Item Function:git
+            }
+            $expectedAttempts = if ($fault -eq 'persistent-race') { 3 } else { 1 }
+            if (-not $caught -or $LASTEXITCODE -eq 0 -or $global:StageFetchCalls -ne $expectedAttempts) { throw "upstream stage did not propagate $fault with the correct attempt bound" }
+            if ($global:StageBlockedCommands.Count) { throw "upstream stage ran post-fetch commands after $fault" }
+            if ((& $gitExe -C $InstallDir rev-parse HEAD).Trim() -ne $blockedRace.Initial) { throw 'failed stage changed HEAD' }
+            if ((Get-Content (Join-Path $InstallDir 'tracked.txt') -Raw).Trim() -ne 'local edit' -or (Get-Content (Join-Path $InstallDir 'untracked.txt') -Raw).Trim() -ne 'keep me') { throw 'failed stage changed local files' }
+            if (& $gitExe -C $InstallDir stash list) { throw 'failed stage stashed local files' }
+            Write-Output "adapted official repository stage blocked later commands for $fault (quiet=$quiet)"
+        }
     }
 } finally {
     $env:HERMES_REPO_URL = $previousRepoUrl

@@ -21,6 +21,8 @@ if ($IncludeDesktop -and -not $global:WrapperMissingDesktop) {
     Set-Content (Join-Path $desktop 'Hermes.exe') 'fixture'
 }
 if ($global:WrapperFailure) { $global:LASTEXITCODE = 1; return }
+git -C $InstallDir fetch origin "+refs/heads/${Branch}:refs/remotes/origin/${Branch}"
+if ($LASTEXITCODE) { throw 'fixture fetch failed' }
 New-Item -ItemType Directory -Force -Path (Join-Path $InstallDir '.git') | Out-Null
 foreach ($file in @('pm/lock.json', 'pm/cli.py', 'hermes_cli/source_completion.py', 'scripts/desktop-update/runtime.ps1')) {
     $path = Join-Path $InstallDir $file

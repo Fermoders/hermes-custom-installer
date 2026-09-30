@@ -31,6 +31,50 @@ function Invoke-Native([string]$FilePath, [string[]]$Arguments, [string]$Working
     }
 }
 
+function Invoke-GitFetchWithRetry([scriptblock]$Command, [int]$RetryDelayMilliseconds = 1000) {
+    # An old Desktop's passive update check can advance origin/main while the
+    # installer fetch is still expecting its prior SHA. Only retry that ref
+    # compare-and-swap failure; auth/network errors still stop installation.
+    $ErrorActionPreference = 'Continue'
+    $PSNativeCommandUseErrorActionPreference = $false
+    foreach ($attempt in 1..3) {
+        # If Git cannot be started, no native exit code will be written.
+        $global:LASTEXITCODE = 1
+        $output = @(& $Command 2>&1)
+        $exitCode = $LASTEXITCODE
+        $output | ForEach-Object { Write-Output "$_" }
+        $refRace = ($output -join "`n") -match '(?im)(fetching ref .* failed: incorrect old value provided|cannot lock ref .*: is at [0-9a-f]+ but expected [0-9a-f]+)'
+        if ($exitCode -eq 0 -or -not $refRace -or $attempt -eq 3) {
+            $global:LASTEXITCODE = $exitCode
+            return
+        }
+        Write-Warning "A concurrent update check changed the Git tracking ref; retrying fetch (attempt $($attempt + 1) of 3)."
+        if ($RetryDelayMilliseconds -gt 0) { Start-Sleep -Milliseconds $RetryDelayMilliseconds }
+    }
+}
+
+function ConvertTo-RetryingInstallerScript([string]$Source) {
+    # Wrap only upstream's repository fetch. Never retry the entire installer:
+    # dependency/setup/build stages must not run twice after partial success.
+    $parseErrors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseInput($Source, [ref]$null, [ref]$parseErrors)
+    if ($parseErrors.Count) { throw "The official Hermes installer could not be parsed." }
+    $fetches = @($ast.FindAll({
+        param($node)
+        $node -is [System.Management.Automation.Language.CommandAst] -and
+            $node.GetCommandName() -eq 'git' -and
+            @($node.CommandElements | Where-Object { $_.Extent.Text -eq 'fetch' }).Count -gt 0
+    }, $true))
+    if ($fetches.Count -ne 1 -or $fetches[0].Extent.Text -notmatch '^git\s+-C\s+\$InstallDir\s+fetch\s+origin\s+') {
+        throw "The official Hermes installer repository fetch contract changed; refusing to alter an unknown command."
+    }
+    $fetch = $fetches[0].Extent
+    $adapted = $Source.Substring(0, $fetch.StartOffset) +
+        'Invoke-GitFetchWithRetry { ' + $fetch.Text + ' }' +
+        $Source.Substring($fetch.EndOffset)
+    return [scriptblock]::Create($adapted)
+}
+
 function Save-ManagedCheckoutChanges([string]$RepositoryPath) {
     $status = @(& git -c windows.appendAtomically=false -C $RepositoryPath status --porcelain 2>$null)
     if ($LASTEXITCODE -ne 0) {
@@ -104,7 +148,7 @@ if (-not $officialInstaller -and $officialInstallerResponse.RawContentStream) {
 if (-not $officialInstaller) {
     throw "The official Hermes installer downloaded successfully but contained no script text."
 }
-$officialScript = [scriptblock]::Create([string]$officialInstaller)
+$officialScript = ConvertTo-RetryingInstallerScript ([string]$officialInstaller)
 $officialArgs = @{
     HermesHome = $HermesHome
     InstallDir = $InstallDir

@@ -12,6 +12,17 @@ irm https://raw.githubusercontent.com/Fermoders/hermes-custom-installer/main/Ins
 
 The same command updates an existing installation.
 
+Before updating, close Hermes Desktop, CLI, and gateway processes and run the
+installer from a separate PowerShell window. On older builds a passive update
+check may race the installer's Git fetch and report `incorrect old value provided`.
+The wrapper retries that specific tracking-ref race up to three times without
+deleting refs, resetting source files, or rerunning later install stages. Other
+Git failures are still reported immediately.
+
+If a previous run stopped at this fetch error, download the wrapper again and
+rerun it after closing Hermes. Do not delete `.git`, tracking refs, or the user
+data directory: the failed fetch does not require reinstalling from scratch.
+
 If the existing managed checkout contains local edits from an older custom
 installation, the installer automatically saves them in a timestamped Git
 stash before switching to the maintained fork. It does not require `-Force`

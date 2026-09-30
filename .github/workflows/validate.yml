@@ -46,6 +46,12 @@ jobs:
           New-Item -ItemType Directory -Force .work | Out-Null
           Invoke-WebRequest https://hermes-agent.nousresearch.com/install.ps1 -OutFile .work/official-install.ps1
           ./tests/Installer.Invocation.Tests.ps1
+      - name: Verify bounded fetch race recovery
+        shell: powershell
+        run: ./tests/Installer.FetchRetry.Tests.ps1
+      - name: Verify fetch race recovery in PowerShell 7
+        shell: pwsh
+        run: ./tests/Installer.FetchRetry.Tests.ps1
       - name: Verify dirty checkout preservation
         shell: pwsh
         run: |

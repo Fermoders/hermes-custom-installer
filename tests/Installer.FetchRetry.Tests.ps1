@@ -177,7 +177,7 @@ try {
         if ($attemptCount -ne 2) { throw "official stage did not recover a real race with exactly two fetches (got $attemptCount; warnings: $stageWarnings)" }
         if (($stageWarnings -join "`n") -notmatch 'retrying fetch') { throw 'official stage did not report race recovery' }
         if ((& $gitExe -C $race.Checkout rev-parse HEAD).Trim() -ne $race.Target) { throw 'upstream repository stage did not advance HEAD' }
-        if ($quiet -and (Get-Content (Join-Path $HermesHome 'logs/install.log') -Raw) -notmatch 'incorrect old value provided') { throw 'interactive install log did not preserve ref-race diagnostic' }
+        if ($quiet -and (Get-Content (Join-Path $HermesHome 'logs/install.log') -Raw) -notmatch '(incorrect old value provided|is at .* but expected)') { throw 'interactive install log did not preserve ref-race diagnostic' }
         Write-Output "adapted official repository stage recovered and fast-forwarded successfully (quiet=$quiet)"
 
         # A real non-retryable Git failure must still stop the official stage.

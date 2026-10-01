@@ -31,6 +31,46 @@ function Invoke-Native([string]$FilePath, [string[]]$Arguments, [string]$Working
     }
 }
 
+function Invoke-HermesDoctor {
+    # Exit 1 alone also means an uncaught Python exception. Require a fresh,
+    # versioned completed report; never classify diagnostic text or tracebacks.
+    $PSNativeCommandUseErrorActionPreference = $false
+    $tempRoot = if ($env:TMPDIR) { $env:TMPDIR } else { [IO.Path]::GetTempPath() }
+    $resultDirectory = Join-Path $tempRoot ('hermes-doctor-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $resultDirectory | Out-Null
+    $resultPath = Join-Path $resultDirectory 'completed.json'
+    try {
+        # Explicit matching scope is essential: a caller-local LASTEXITCODE
+        # must not shadow the native process status (or a missing status).
+        $global:LASTEXITCODE = $null
+        & hermes doctor --result-json $resultPath
+        $exitCode = $global:LASTEXITCODE
+        if ($null -eq $exitCode) { throw 'hermes doctor did not report an exit code.' }
+        if ($exitCode -notin @(0, 1)) { throw "hermes failed with exit code $exitCode (hermes doctor)" }
+        if (-not (Test-Path -LiteralPath $resultPath -PathType Leaf)) {
+            throw "hermes doctor did not produce a completed diagnostic result (exit code $exitCode)."
+        }
+        $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json -ErrorAction Stop
+        if (($result.schema_version -isnot [int] -and $result.schema_version -isnot [long]) -or
+            $result.schema_version -ne 1 -or $result.command -cne 'doctor' -or
+            $result.completed -isnot [bool] -or -not $result.completed -or
+            ($result.exit_code -isnot [int] -and $result.exit_code -isnot [long]) -or
+            $result.exit_code -ne $exitCode -or
+            $result.issues -isnot [array] -or $result.manual_issues -isnot [array] -or
+            @(@($result.issues) + @($result.manual_issues) | Where-Object { $_ -isnot [string] }).Count -gt 0 -or
+            ($result.fixed -isnot [int] -and $result.fixed -isnot [long]) -or $result.fixed -ne 0 -or
+            [int][bool]($result.issues.Count + $result.manual_issues.Count) -ne $exitCode) {
+            throw 'hermes doctor returned an invalid completed diagnostic result.'
+        }
+        if ($exitCode -eq 1) {
+            Write-Warning 'Hermes Custom is installed, but hermes doctor reported unresolved diagnostic issues (exit code 1). Review the report above; no automatic repairs were run.'
+        }
+        $global:LASTEXITCODE = 0
+    } finally {
+        Remove-Item -LiteralPath $resultDirectory -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Invoke-GitFetchWithRetry([scriptblock]$Command, [int]$RetryDelayMilliseconds = 1000) {
     # An old Desktop's passive update check can advance origin/main while the
     # installer fetch is still expecting its prior SHA. Only retry that ref
@@ -198,7 +238,7 @@ try {
     }
     Write-Step "Verifying the installation"
     Invoke-Native "hermes" @("--version")
-    Invoke-Native "hermes" @("doctor") # hermes doctor
+    Invoke-HermesDoctor
     if (-not $NoDesktop -and -not $NoLaunch) {
         Write-Step "Launching Hermes Desktop"
         Start-Process "hermes" -ArgumentList "desktop"

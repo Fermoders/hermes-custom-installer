@@ -34,8 +34,29 @@ and does not delete the previous work.
 2. Runs the official installer once with `HERMES_REPO_URL` set to the custom repository and `Branch` set to `-Ref`.
 3. Lets upstream manage checkout recovery, PM-managed Python 3.14, dependencies, source completion, and the requested Desktop build.
 4. Checks installer status, source origin/branch, required PM/runtime files, and the requested Desktop artifact.
-5. Runs `hermes setup`, `hermes --version`, and `hermes doctor`, stopping on any failure.
-6. Launches Hermes Desktop unless disabled.
+5. Runs `hermes setup` and `hermes --version`, stopping on failure, then runs `hermes doctor` as a diagnostic report.
+6. Launches Hermes Desktop unless disabled, including when doctor reports unresolved findings.
+
+`hermes doctor` returns `0` when no unresolved problems remain and `1` when
+its report contains diagnostic issues ([official exit-status contract](https://hermes-agent.nousresearch.com/docs/reference/cli-commands#hermes-doctor)).
+The wrapper runs `hermes doctor --result-json <fresh temporary path>` and
+preserves the human report. It accepts `0` or `1` only with a valid version-1
+JSON result identifying `doctor`, `completed: true`, matching exit status and
+findings. A Python crash returning `1` without that result remains fatal and
+prevents Desktop launch. Completed findings produce a warning and the handled
+status is cleared. Temporary results are removed even on failure; caller-local
+`LASTEXITCODE` values cannot shadow the explicitly global reset/read.
+It does not run `doctor --fix` or change configuration/dependencies to silence
+findings. Command-launch errors, missing process status, unexpected doctor exit
+codes, setup/version failures, and Desktop-launch exceptions still stop the
+wrapper. An installed build is not necessarily a healthy configuration.
+
+Regression checks (no live installation):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/Installer.Invocation.Tests.ps1
+pwsh -NoProfile -File tests/Installer.Invocation.Tests.ps1
+```
 
 The official pass uses `-NonInteractive`; `-SkipSetup` controls the wrapper's
 subsequent setup wizard. Caller repository/home environment values are restored

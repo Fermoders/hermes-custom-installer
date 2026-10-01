@@ -260,3 +260,4 @@ try {
     $PSNativeCommandUseErrorActionPreference = $oldNativePreference
     Remove-Item Function:hermes
 }
+$global:LASTEXITCODE = 0 # Expected failure probes above must not fail the CI shell.

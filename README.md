@@ -77,6 +77,27 @@ The custom source currently includes:
 - idempotent patch handling for already-applied V4A updates;
 - streaming/Codex reliability fixes carried by the custom branch.
 
+### FastContext in the maintained source
+
+FastContext is integrated into the custom fork, not reapplied as a local recovery
+patch after installation. The normal installer/update flow therefore retains it.
+Remote custom `/models` catalogs are cached by endpoint and credential fingerprint;
+the Model Settings context probe uses the same profile-scoped runtime route as chat.
+An old URL-only context cache cannot override that credential's advertised window.
+
+Session-controlled paid priority is **off by default**. To opt in for a named
+Chat Completions provider, use the supported config command:
+
+```powershell
+hermes config set providers.my-gateway.capabilities.allow_paid_priority true
+```
+
+Then `/fast fast`, `/fast normal`, and the `auto`/`cold` windows control priority
+only when the actual credential's catalog advertises `priority` for the exact
+model ID. This does not enable ultrafast or guarantee a proxy's price or final
+upstream tier. Explicit `extra_body.service_tier` remains a separate always-on
+setting. Installation does not change provider consent, credentials, or chat history.
+
 ## Non-interactive examples
 
 Download the script first when passing options:
